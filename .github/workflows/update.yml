@@ -1,9 +1,12 @@
 name: Update Google AI Rules
 
+permissions:
+  contents: write    # ← 关键！允许 push
+
 on:
   schedule:
-    - cron: "0 0 * * *"   # 每天 00:00 UTC 自动跑一次
-  workflow_dispatch: {}   # 手动点一下也能跑
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
 
 jobs:
   update:
@@ -30,7 +33,11 @@ jobs:
         run: |
           git config --global user.name "google-ai-bot"
           git config --global user.email "bot@example.com"
+
           git add google-ai.conf || true
+
+          # 如果没有变化，不提交
           git diff --cached --quiet && echo "No changes" && exit 0
+
           git commit -m "Auto update google-ai.conf"
           git push
