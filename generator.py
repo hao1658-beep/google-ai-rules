@@ -3,41 +3,66 @@
 
 """
 generator.py
-每天运行一次：
-1. 从公开规则源拉取最新 Google AI / Gemini / DeepMind 相关域名
-2. 过滤出跟 google / gemini / ai 相关的域名
-3. 去重、去掉已经手写在 google-ai.conf 里的域名
-4. 把新域名以 DOMAIN-SUFFIX,xxx,PROXY 形式追加到 google-ai.conf
+每天运行一次更新以下平台域名：
+1. Google AI / Gemini / DeepMind
+2. OpenAI / ChatGPT
+3. Claude / Anthropic
+
+输出：
+- google-ai.conf
+- openai.conf
+- claude.conf
+- all-ai.conf（所有平台合并）
 """
 
 import re
 import requests
 from pathlib import Path
 
-# 公开规则源（以后想加可以在这里扩展）
-SOURCE_URLS = [
-    # blackmatrix7 Gemini 规则（含 gemini / deepmind 等）
+
+# ------------------------------
+# 规则源 URL（可随时扩展）
+# ------------------------------
+
+GOOGLE_SOURCES = [
     "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Gemini/Gemini.list",
-    # 一个常见的 AI 平台合集规则（里面也有 Gemini 相关域名）
     "https://raw.githubusercontent.com/limbopro/Profiles4limbo/main/AI_Platforms.list",
 ]
 
-# 仓库中的主配置文件
-CONF_PATH = Path("google-ai.conf")
+OPENAI_SOURCES = [
+    "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/OpenAI/OpenAI.list",
+    "https://raw.githubusercontent.com/limbopro/Profiles4limbo/main/OpenAI.list",
+]
+
+CLAUDE_SOURCES = [
+    "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Claude/Claude.list",
+    "https://raw.githubusercontent.com/limbopro/Profiles4limbo/main/Claude.list",
+]
 
 
-def fetch_google_ai_domains() -> set:
-    """从多个远程规则源中抓取可能属于 Google AI / Gemini 的域名"""
+# ------------------------------
+# 输出文件路径
+# ------------------------------
+GOOGLE_CONF = Path("google-ai.conf")
+OPENAI_CONF = Path("openai.conf")
+CLAUDE_CONF = Path("claude.conf")
+ALL_CONF = Path("all-ai.conf")
+
+
+# ------------------------------
+# 工具函数：拉取域名
+# ------------------------------
+def fetch_domains(urls: list, keywords: list) -> set:
     domains: set[str] = set()
 
-    for url in SOURCE_URLS:
+    for url in urls:
         try:
-            print(f"[+] Fetching from {url}")
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            text = resp.text
+            print(f"[+] Fetching {url}")
+            r = requests.get(url, timeout=15)
+            r.raise_for_status()
+            text = r.text
         except Exception as e:
-            print(f"[!] Failed to fetch {url}: {e}")
+            print(f"[!] Fetch failed: {url} → {e}")
             continue
 
         for line in text.splitlines():
@@ -45,73 +70,73 @@ def fetch_google_ai_domains() -> set:
             if not line or line.startswith("#"):
                 continue
 
-            # 支持类似：
-            # DOMAIN-SUFFIX,gemini.google.com
-            # DOMAIN,ai.google.dev
             m = re.search(r"\bDOMAIN(?:-SUFFIX)?\s*,\s*([^,]+)", line)
             if not m:
                 continue
 
-            d = m.group(1).strip()
+            d = m.group(1).strip().lower()
 
-            # 只要 Google / Gemini / DeepMind 相关
-            low = d.lower()
-            if "google" not in low:
-                continue
-            if not any(k in low for k in ["gemini", "ai.", "aistudio", "deepmind", "palm", "makersuite", "bard"]):
-                continue
+            if any(k in d for k in keywords):
+                if "." in d:
+                    domains.add(d)
 
-            # 简单排除明显非域名
-            if "." not in d:
-                continue
-
-            domains.add(d)
-
-    print(f"[+] Collected {len(domains)} candidate domains")
     return domains
 
 
-def read_existing_domains_from_conf(conf_text: str) -> set:
-    """从现有 google-ai.conf 中读出已经存在的 DOMAIN-SUFFIX 域名，避免重复"""
-    existing: set[str] = set()
-    for line in conf_text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        m = re.search(r"DOMAIN-SUFFIX\s*,\s*([^,]+)", line)
-        if m:
-            existing.add(m.group(1).strip())
-    return existing
-
-
-def main() -> None:
-    if not CONF_PATH.exists():
-        raise SystemExit("google-ai.conf not found. Please create it first.")
-
-    base_text = CONF_PATH.read_text(encoding="utf-8")
-
-    # 1. 读取现有已经写死的域名
-    existing = read_existing_domains_from_conf(base_text)
-    print(f"[+] Existing DOMAIN-SUFFIX entries: {len(existing)}")
-
-    # 2. 抓取远程规则中的候选域名
-    candidates = fetch_google_ai_domains()
-
-    # 3. 过滤掉已存在的
-    new_domains = sorted(d for d in candidates if d not in existing)
-    print(f"[+] New domains to append: {len(new_domains)}")
-
-    # 4. 生成新的配置文本
-    lines = base_text.rstrip().splitlines()
-    lines.append("")  # 确保有一个空行
-    lines.append("# ==== Auto generated Google AI domains (PROXY) ====")
-
-    for d in new_domains:
+# ------------------------------
+# 写文件 helper
+# ------------------------------
+def write_conf(path: Path, domains: list, title="# Auto generated"):
+    lines = [title]
+    for d in domains:
         lines.append(f"DOMAIN-SUFFIX,{d},PROXY")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"[+] Updated: {path}")
 
-    new_text = "\n".join(lines) + "\n"
-    CONF_PATH.write_text(new_text, encoding="utf-8")
-    print("[+] google-ai.conf updated.")
+
+# ------------------------------
+# 主程序
+# ------------------------------
+def main():
+    print("========== Updating AI Rules ==========")
+
+    # -------------------------
+    # Google AI / Gemini
+    # -------------------------
+    google = fetch_domains(
+        GOOGLE_SOURCES,
+        ["google", "gemini", "deepmind", "aistudio", "bard", "makersuite", "palm"]
+    )
+    google = sorted(google)
+    write_conf(GOOGLE_CONF, google, "# ==== Google AI / Gemini ====")
+
+    # -------------------------
+    # OpenAI / ChatGPT
+    # -------------------------
+    openai = fetch_domains(
+        OPENAI_SOURCES,
+        ["openai", "chatgpt", "oaiusercontent", "sora", "api.openai"]
+    )
+    openai = sorted(openai)
+    write_conf(OPENAI_CONF, openai, "# ==== OpenAI ====")
+
+    # -------------------------
+    # Claude / Anthropic
+    # -------------------------
+    claude = fetch_domains(
+        CLAUDE_SOURCES,
+        ["anthropic", "claude", "claude-api"]
+    )
+    claude = sorted(claude)
+    write_conf(CLAUDE_CONF, claude, "# ==== Claude / Anthropic ====")
+
+    # -------------------------
+    # 合并 all-ai.conf
+    # -------------------------
+    all_domains = sorted(set(google) | set(openai) | set(claude))
+    write_conf(ALL_CONF, all_domains, "# ==== All AI Platforms Combined ====")
+
+    print("[+] All tasks completed.")
 
 
 if __name__ == "__main__":
